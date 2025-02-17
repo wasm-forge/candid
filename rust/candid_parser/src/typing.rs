@@ -361,3 +361,46 @@ pub fn check_file(file: &Path) -> Result<(TypeEnv, Option<Type>)> {
 pub fn pretty_check_file(file: &Path) -> Result<(TypeEnv, Option<Type>)> {
     check_file_(file, true)
 }
+
+pub fn check_str(prog: &str, is_pretty: bool) -> Result<(TypeEnv, Option<Type>)> {
+    let base = std::env::current_dir().unwrap().to_path_buf();
+
+    let prog = prog.parse::<IDLProg>()?;
+
+    let mut visited: BTreeMap<PathBuf, bool> = BTreeMap::new();
+    let mut imports: Vec<(PathBuf, String)> = Vec::new();
+
+    load_imports(is_pretty, &base, &mut visited, &prog, &mut imports)?;
+    let imports: Vec<_> = imports
+        .iter()
+        .map(|file| match visited.get(&file.0) {
+            Some(x) => (*x, &file.0, &file.1),
+            None => unreachable!(),
+        })
+        .collect();
+
+    let mut te = TypeEnv::new();
+    let mut env = Env {
+        te: &mut te,
+        pre: false,
+    };
+    let mut actor: Option<Type> = None;
+
+    for (include_serv, path, name) in imports.iter() {
+        let code = std::fs::read_to_string(path)?;
+        let code = code.parse::<IDLProg>()?;
+        check_decs(&mut env, &code.decs)?;
+        if *include_serv {
+            let t = check_actor(&env, &code.actor)?;
+            actor = merge_actor(&env, &actor, &t, name)?;
+        }
+    }
+
+    check_decs(&mut env, &prog.decs)?;
+    let mut res = check_actor(&env, &prog.actor)?;
+
+    if actor.is_some() {
+        res = merge_actor(&env, &res, &actor, "")?;
+    }
+    Ok((te, res))
+}
